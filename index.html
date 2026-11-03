@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>RoadPulse Smart Kickboard</title>
+  
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
+
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #map { width: 100%; height: 100vh; }
+
+    /* 위험구역 진입 시 분홍색 테두리 오버레이 */
+    #dangerBorderOverlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      box-sizing: border-box;
+      border: 0px solid transparent;
+      z-index: 2500;
+      transition: border 0.25s ease-in-out, box-shadow 0.25s ease-in-out;
+    }
+
+    #dangerBorderOverlay.active-pink {
+      border: 8px solid #ff1493;
+      box-shadow: inset 0 0 25px rgba(255, 20, 147, 0.75), 0 0 15px rgba(255, 20, 147, 0.5);
+      animation: pulsePink 1.2s infinite alternate;
+    }
+
+    @keyframes pulsePink {
+      0% { border-color: #ff1493; box-shadow: inset 0 0 15px rgba(255, 20, 147, 0.5); }
+      100% { border-color: #ff69b4; box-shadow: inset 0 0 35px rgba(255, 105, 180, 0.9); }
+    }
+
+    .control-panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: rgba(255, 255, 255, 0.94); padding: 10px 14px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25); display: flex; flex-direction: column; gap: 6px;
+    }
+    .btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
+    button {
+      padding: 8px 12px; font-size: 13px; font-weight: bold;
+      border: none; border-radius: 4px; background: #007bff; color: white; cursor: pointer;
+    }
+    button:active { background: #0056b3; }
+    #status { font-size: 12px; color: #333; }
+    .wake-status { font-size: 11px; color: #28a745; font-weight: bold; }
+
+    /* HUD 스타일 및 토글 애니메이션 */
+    .mini-hud {
+      position: absolute; bottom: 20px; left: 12px; z-index: 1000;
+      background: rgba(18, 22, 32, 0.9); backdrop-filter: blur(6px);
+      padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4); color: #fff; min-width: 220px;
+      display: flex; flex-direction: column; gap: 5px; pointer-events: auto;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      transform-origin: bottom left;
+    }
+    .mini-hud.hidden {
+      opacity: 0;
+      transform: scale(0.8) translateY(20px);
+      pointer-events: none;
+    }
+
+    .hud-header {
+      font-size: 11px; font-weight: bold; color: #a0aec0; letter-spacing: 0.5px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 4px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .hud-header-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-close-hud {
+      background: none;
+      border: none;
+      color: #a0aec0;
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      font-weight: normal;
+    }
+    .btn-close-hud:hover {
+      color: #ff3b30;
+    }
+
+    /* HUD가 닫혔을 때 보여줄 열기 버튼 */
+    .btn-open-hud {
+      position: absolute; bottom: 20px; left: 12px; z-index: 1000;
+      background: rgba(18, 22, 32, 0.9); backdrop-filter: blur(6px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #00e5ff; font-weight: bold; font-size: 12px;
+      padding: 10px 14px; border-radius: 20px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+      display: flex; align-items: center; gap: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease-in-out;
+      opacity: 0;
+      transform: scale(0.8);
+      pointer-events: none;
+    }
+    .btn-open-hud.visible {
+      opacity: 1;
+      transform: scale(1);
+      pointer-events: auto;
+    }
+    .btn-open-hud:hover {
+      background: rgba(0, 229, 255, 0.15);
+      border-color: #00e5ff;
+    }
+
+    .hud-row { display: flex; justify-content: space-between; align-items: baseline; }
+    .hud-speed-box { display: flex; align-items: baseline; gap: 3px; }
+    .hud-speed-val { font-size: 26px; font-weight: 800; color: #00e5ff; font-family: monospace; }
+    .hud-speed-unit { font-size: 11px; color: #a0aec0; }
+
+    .hud-badge {
+      font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px;
+    }
+    .badge-danger-zone { background: rgba(255, 20, 147, 0.3); color: #ff69b4; border: 1px solid #ff1493; }
+    .badge-safe-zone { background: rgba(56, 161, 105, 0.2); color: #a0aec0; }
+
+    .hud-detail { font-size: 11px; color: #cbd5e0; }
+    
+    .hud-coords-box {
+      background: rgba(0, 0, 0, 0.28); border-radius: 6px; padding: 6px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08); margin: 2px 0;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .hud-coords { font-size: 11px; font-family: monospace; color: #00e5ff; line-height: 1.3; }
+    .hud-nav-meta {
+      font-size: 11px; font-family: monospace; color: #ffd166;
+      display: flex; justify-content: space-between; border-top: 1px dashed rgba(255, 255, 255, 0.1);
+      padding-top: 4px; margin-top: 2px;
+    }
+
+    .heading-marker {
+      width: 36px; height: 36px;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .heading-arrow {
+      width: 32px; height: 32px;
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+    }
+
+    #emergencyAlert {
+      display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(200, 0, 0, 0.92); z-index: 3000;
+      flex-direction: column; justify-content: center; align-items: center; color: #fff; text-align: center;
+      padding: 24px; box-sizing: border-box;
+    }
+    #telegramStatus { font-size: 14px; margin-top: 12px; color: #ffeb3b; font-weight: bold; }
+
+    #configModal {
+      display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.75); z-index: 3500;
+      justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;
+    }
+    .config-card {
+      background: #1a202c; color: #fff; border-radius: 12px; padding: 20px;
+      width: 100%; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      border: 1px solid #2d3748;
+    }
+    .config-card h3 { font-size: 17px; margin-bottom: 8px; color: #00e5ff; }
+    .config-card p { font-size: 12px; color: #a0aec0; margin-bottom: 16px; line-height: 1.4; }
+    .config-field { margin-bottom: 12px; }
+    .config-field label { display: block; font-size: 12px; margin-bottom: 4px; color: #cbd5e0; }
+    .config-field input {
+      width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #4a5568;
+      background: #2d3748; color: #fff; font-size: 13px; box-sizing: border-box;
+    }
+    .config-field input:focus { outline: none; border-color: #00e5ff; }
+    .config-btns { display: flex; gap: 8px; margin-top: 16px; }
+    .config-btns button { flex: 1; padding: 10px; font-size: 13px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+
+  <div id="dangerBorderOverlay"></div>
+
+  <div class="control-panel">
+    <div class="btn-group">
+      <button id="btn-ble" style="background: #28a745; flex: 1;">📡 주변 BLE 연결</button>
+      <button id="btn-toggle-rotate" style="background: #17a2b8;">🧭 내비 회전: ON</button>
+      <button id="btn-open-config" style="background: #4a5568;">⚙️ 설정</button>
+      <button id="btn-clear-track" style="background: #6c757d;">궤적 리셋</button>
+    </div>
+    <div class="btn-group">
+      <button id="btn-set-danger" style="background: #d9534f; flex: 1;">⚠️ 위험구역 추가(10m)</button>
+      <button id="btn-clear-danger" style="background: #8e44ad; flex: 1;">❌ 위험구역 전체 해지</button>
+    </div>
+    <div id="status">위치 수신 준비 중...</div>
+    <div id="wake-info" class="wake-status">화면 절전 방지: 대기 중</div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- 닫기(접기) 버튼이 추가된 HUD -->
+  <div class="mini-hud" id="miniHud">
+    <div class="hud-header">
+      <span>ROADPULSE HUD</span>
+      <div class="hud-header-controls">
+        <span id="hudBleDot" style="color: #e53e3e; font-size: 10px;">● OFF</span>
+        <button class="btn-close-hud" id="btnCloseHud" title="HUD 닫기">×</button>
+      </div>
+    </div>
+    
+    <div class="hud-row">
+      <div class="hud-speed-box">
+        <span class="hud-speed-val" id="hudSpeed">0.0</span>
+        <span class="hud-speed-unit">km/h</span>
+      </div>
+      <span id="hudDangerBadge" class="hud-badge badge-safe-zone">위험구역: 0개</span>
+    </div>
+
+    <div class="hud-coords-box">
+      <div class="hud-coords" id="hudLat">위도: 대기 중</div>
+      <div class="hud-coords" id="hudLng">경도: 대기 중</div>
+      <div class="hud-nav-meta">
+        <span id="hudAlt">고도: -- m</span>
+        <span id="hudHeading">방위: --°</span>
+      </div>
+    </div>
+
+    <div class="hud-detail" id="hudDangerDist">최단 위험거리: --</div>
+    <div class="hud-detail" id="hudTilt">기울기: 0.0°</div>
+    <div class="hud-detail" id="hudTrack">누적 경로: 0 포인트</div>
+  </div>
+
+  <!-- HUD 접혔을 때 띄울 펼치기 버튼 -->
+  <button class="btn-open-hud" id="btnOpenHud">📊 HUD 열기</button>
+
+  <div id="emergencyAlert">
+    <h2 style="font-size: 26px; margin-bottom: 8px;">🚨 전복 사고 감지!</h2>
+    <p style="font-size: 14px; line-height: 1.5;">기기 전복 신호가 수신되었습니다.<br>보호자 텔레그램으로 사고 위치를 자동 전송합니다.</p>
+    <div id="telegramStatus">전송 대기 중...</div>
+    <button onclick="dismissCrashAlert()" style="background: #fff; color: #c53030; border: none; padding: 12px 28px; border-radius: 25px; font-weight: bold; font-size: 14px; margin-top: 20px; cursor: pointer;">
+      오작동 해제 (화면 닫기)
+    </button>
+  </div>
+
+  <div id="configModal">
+    <div class="config-card">
+      <h3>⚙️ 텔레그램 SOS 알림 설정</h3>
+      <p>토큰과 ID는 스마트폰 브라우저에만 저장되며 GitHub 코드에 남지 않습니다.</p>
+      
+      <div class="config-field">
+        <label for="cfgToken">텔레그램 봇 토큰 (Bot Token)</label>
+        <input type="password" id="cfgToken" placeholder="예: 8050240111:AAHyy..." />
+      </div>
+
+      <div class="config-field">
+        <label for="cfgChatId">수신자 Chat ID</label>
+        <input type="text" id="cfgChatId" placeholder="예: 6424076351" />
+      </div>
+
+      <div class="config-btns">
+        <button id="btnSaveConfig" style="background: #28a745;">저장하기</button>
+        <button id="btnCloseConfig" style="background: #6c757d;">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let TELEGRAM_BOT_TOKEN = localStorage.getItem("TG_BOT_TOKEN") || "";
+    let TELEGRAM_CHAT_ID   = localStorage.getItem("TG_CHAT_ID") || "";
+    let telegramSent = false;
+
+    const configModal = document.getElementById('configModal');
+    const inputToken  = document.getElementById('cfgToken');
+    const inputChatId = document.getElementById('cfgChatId');
+
+    function openConfigModal() {
+      inputToken.value  = TELEGRAM_BOT_TOKEN;
+      inputChatId.value = TELEGRAM_CHAT_ID;
+      configModal.style.display = 'flex';
+    }
+
+    function closeConfigModal() {
+      configModal.style.display = 'none';
+    }
+
+    document.getElementById('btn-open-config').addEventListener('click', openConfigModal);
+    document.getElementById('btnCloseConfig').addEventListener('click', closeConfigModal);
+
+    document.getElementById('btnSaveConfig').addEventListener('click', () => {
+      const valToken  = inputToken.value.trim();
+      const valChatId = inputChatId.value.trim();
+
+      if (!valToken || !valChatId) return;
+
+      TELEGRAM_BOT_TOKEN = valToken;
+      TELEGRAM_CHAT_ID   = valChatId;
+
+      localStorage.setItem("TG_BOT_TOKEN", TELEGRAM_BOT_TOKEN);
+      localStorage.setItem("TG_CHAT_ID", TELEGRAM_CHAT_ID);
+      closeConfigModal();
+    });
+
+    const map = L.map('map', {
+      rotate: true,
+      bearing: 0,
+      touchRotate: true,
+      zoomControl: false
+    }).setView([37.5665, 126.9780], 17);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let userMarker = null;
+    let watchId = null;
+    let currentLat = null;
+    let currentLng = null;
+    let currentSpeedKmh = 0.0;
+    let wakeLock = null;
+    let isFirstPosition = true;
+
+    let isHeadingUpMode = true;
+    let lastAppliedBearing = 0;
+
+    // =================================================================
+    // HUD 켜기/끄기(토글) 제어 로직 추가
+    // =================================================================
+    const miniHud = document.getElementById('miniHud');
+    const btnCloseHud = document.getElementById('btnCloseHud');
+    const btnOpenHud = document.getElementById('btnOpenHud');
+
+    // 닫기 버튼 누르면 -> HUD 숨기고, '열기' 버튼 노출
+    btnCloseHud.addEventListener('click', () => {
+      miniHud.classList.add('hidden');
+      btnOpenHud.classList.add('visible');
+    });
+
+    // 열기 버튼 누르면 -> HUD 표시하고, '열기' 버튼 숨김
+    btnOpenHud.addEventListener('click', () => {
+      miniHud.classList.remove('hidden');
+      btnOpenHud.classList.remove('visible');
+    });
+
+    // =================================================================
+    // 다중 위험 구역 관리 & 실시간 상태 판정
+    // =================================================================
+    let dangerZones = [];
+    let dangerCircles = [];
+    const borderOverlay = document.getElementById('dangerBorderOverlay');
+    
+    let wasInsideDangerZone = false;
+    let isCurrentInsideDanger = false; // ★ ESP32로 전달할 현재 위치 위험구역 진입 여부
+
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const phi1 = lat1 * Math.PI / 180;
+      const phi2 = lat2 * Math.PI / 180;
+      const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+      const deltaLambda = (lon2 - lon1) * Math.PI / 180;
+
+      const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+                Math.cos(phi1) * Math.cos(phi2) *
+                Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+
+    function renderAllDangerCircles() {
+      dangerCircles.forEach(circle => map.removeLayer(circle));
+      dangerCircles = [];
+
+      dangerZones.forEach((zone, index) => {
+        const circle = L.circle([zone.lat, zone.lng], {
+          color: '#ff1493',
+          fillColor: '#ff69b4',
+          fillOpacity: 0.35,
+          radius: 10,
+          weight: 2
+        }).addTo(map).bindPopup(`⚠️ 위험구역 #${index + 1} (반경 10m)`);
+
+        dangerCircles.push(circle);
+      });
+    }
+
+    function loadSavedDangerZones() {
+      const saved = localStorage.getItem("ROAD_DANGER_ZONES");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          dangerZones = Array.isArray(parsed) ? parsed : [parsed];
+          renderAllDangerCircles();
+          updateDangerZoneHUD();
+        } catch (e) {}
+      }
+    }
+
+    function updateDangerZoneHUD() {
+      const badge = document.getElementById('hudDangerBadge');
+      const distEl = document.getElementById('hudDangerDist');
+
+      if (!dangerZones || dangerZones.length === 0) {
+        badge.innerText = '위험구역: 0개';
+        badge.className = 'hud-badge badge-safe-zone';
+        distEl.innerText = '최단 위험거리: --';
+        borderOverlay.classList.remove('active-pink');
+        wasInsideDangerZone = false;
+        isCurrentInsideDanger = false;
+        return;
+      }
+
+      if (currentLat === null || currentLng === null) return;
+
+      let minDistance = Infinity;
+      let isInsideAnyZone = false;
+
+      dangerZones.forEach(zone => {
+        const dist = getDistanceMeters(currentLat, currentLng, zone.lat, zone.lng);
+        if (dist < minDistance) {
+          minDistance = dist;
+        }
+        if (dist <= 10) {
+          isInsideAnyZone = true;
+        }
+      });
+
+      distEl.innerText = `최단 위험거리: ${Math.round(minDistance)}m`;
+      isCurrentInsideDanger = isInsideAnyZone; // ★ ESP32 전송용 상태 갱신
+
+      if (isInsideAnyZone) {
+        badge.innerText = `🚨 위험구역 내부! (${dangerZones.length}개 설정됨)`;
+        badge.className = 'hud-badge badge-danger-zone';
+        borderOverlay.classList.add('active-pink');
+
+        if (!wasInsideDangerZone) {
+          triggerOneSecondVibration();
+          wasInsideDangerZone = true;
+        }
+      } else {
+        badge.innerText = `위험구역: ${dangerZones.length}개 설정됨`;
+        badge.className = 'hud-badge badge-safe-zone';
+        borderOverlay.classList.remove('active-pink');
+        wasInsideDangerZone = false;
+      }
+    }
+
+    function triggerOneSecondVibration() {
+      if ('vibrate' in navigator) {
+        try {
+          navigator.vibrate(1000);
+          console.log("📳 위험구역 진입: 1초간 진동 작동");
+        } catch (err) {
+          console.warn("진동 실행 에러:", err);
+        }
+      }
+    }
+
+    function addDangerZoneAtCurrentLocation() {
+      if (currentLat === null || currentLng === null) {
+        console.warn("⚠️ GPS 좌표 수신 대기 중");
+        return;
+      }
+
+      const isTooClose = dangerZones.some(zone => {
+        const distance = getDistanceMeters(currentLat, currentLng, zone.lat, zone.lng);
+        return distance < 5.0; // 5m 이내 중복 방지
+      });
+
+      if (isTooClose) {
+        console.log("ℹ️ 5m 이내에 기존 위험구역이 있어 추가를 건너뜁니다.");
+        return;
+      }
+
+      const newZone = {
+        id: Date.now(),
+        lat: currentLat,
+        lng: currentLng,
+        radius: 10
+      };
+
+      dangerZones.push(newZone);
+      localStorage.setItem("ROAD_DANGER_ZONES", JSON.stringify(dangerZones));
+      
+      renderAllDangerCircles();
+      updateDangerZoneHUD();
+      console.log(`✅ 새로운 위험구역 추가 완료! (총 ${dangerZones.length}개)`);
+    }
+
+    function clearAllDangerZonesSilent() {
+      dangerCircles.forEach(circle => map.removeLayer(circle));
+      dangerCircles = [];
+      dangerZones = [];
+      wasInsideDangerZone = false;
+      isCurrentInsideDanger = false;
+      localStorage.removeItem("ROAD_DANGER_ZONES");
+      updateDangerZoneHUD();
+    }
+
+    document.getElementById('btn-set-danger').addEventListener('click', addDangerZoneAtCurrentLocation);
+    document.getElementById('btn-clear-danger').addEventListener('click', clearAllDangerZonesSilent);
+
+    function createNavIcon(isMoving) {
+      const svgContent = isMoving ? `
+        <svg class="heading-arrow" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="16" fill="rgba(0, 123, 255, 0.25)" stroke="#007bff" stroke-width="2"/>
+          <path d="M18 4 L27 27 L18 21 L9 27 Z" fill="#00e5ff" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      ` : `
+        <svg class="heading-arrow" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="15" fill="rgba(40, 167, 69, 0.25)" stroke="#28a745" stroke-width="2"/>
+          <circle cx="18" cy="18" r="7" fill="#28a745" stroke="#ffffff" stroke-width="2"/>
+        </svg>
+      `;
+
+      return L.divIcon({
+        className: 'heading-marker',
+        html: svgContent,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -18]
+      });
+    }
+
+    let pathCoordinates = [];
+    const trackPolyline = L.polyline([], {
+      color: '#007bff',
+      weight: 5,
+      opacity: 0.8,
+      smoothFactor: 1.0
+    }).addTo(map);
+
+    L.DomEvent.disableClickPropagation(document.getElementById('miniHud'));
+    L.DomEvent.disableClickPropagation(document.getElementById('btnOpenHud')); // 방해 방지
+
+    document.getElementById('btn-clear-track').addEventListener('click', () => {
+      pathCoordinates = [];
+      trackPolyline.setLatLngs([]);
+      document.getElementById('hudTrack').innerText = '누적 경로: 0 포인트';
+    });
+
+    const btnToggleRotate = document.getElementById('btn-toggle-rotate');
+    btnToggleRotate.addEventListener('click', () => {
+      isHeadingUpMode = !isHeadingUpMode;
+      if (isHeadingUpMode) {
+        btnToggleRotate.innerText = '🧭 내비 회전: ON';
+        btnToggleRotate.style.background = '#17a2b8';
+      } else {
+        btnToggleRotate.innerText = '🧭 북쪽 고정: ON';
+        btnToggleRotate.style.background = '#6c757d';
+        map.setBearing(0);
+        lastAppliedBearing = 0;
+      }
+    });
+
+    function getDirectionText(heading) {
+      if (heading === null || isNaN(heading)) return '--';
+      const directions = ['북(N)', '북동(NE)', '동(E)', '남동(SE)', '남(S)', '남서(SW)', '서(W)', '북서(NW)'];
+      const index = Math.round(heading / 45) % 8;
+      return `${Math.round(heading)}° ${directions[index]}`;
+    }
+
+    async function requestWakeLock() {
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          document.getElementById('wake-info').innerText = '화면 절전 방지: 활성화';
+          document.getElementById('wake-info').style.color = '#28a745';
+        } catch (err) {}
+      }
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+        document.getElementById('wake-info').innerText = '화면 절전 방지: 해제됨';
+        document.getElementById('wake-info').style.color = '#6c757d';
+      }
+    }
+
+    function startAutoGpsTracking() {
+      if (!('geolocation' in navigator)) {
+        document.getElementById('status').innerText = '위치 정보 미지원 브라우저';
+        return;
+      }
+
+      document.getElementById('status').innerText = '📍 위치 수신 대기 중...';
+
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          currentLat = pos.coords.latitude;
+          currentLng = pos.coords.longitude;
+          const accuracy = pos.coords.accuracy;
+          const altitude = pos.coords.altitude;
+          const heading = pos.coords.heading;
+          const speedRaw = pos.coords.speed;
+
+          if (speedRaw !== null && !isNaN(speedRaw) && speedRaw >= 0) {
+            currentSpeedKmh = speedRaw * 3.6;
+          } else {
+            currentSpeedKmh = 0.0;
+          }
+
+          document.getElementById('hudSpeed').innerText = currentSpeedKmh.toFixed(1);
+
+          const newLatLng = [currentLat, currentLng];
+          pathCoordinates.push(newLatLng);
+          trackPolyline.setLatLngs(pathCoordinates);
+          document.getElementById('hudTrack').innerText = `누적 경로: ${pathCoordinates.length} 포인트`;
+
+          document.getElementById('status').innerText = `위치 수신 중 (오차: ±${Math.round(accuracy)}m)`;
+          document.getElementById('hudLat').innerText = `위도: ${currentLat.toFixed(6)}`;
+          document.getElementById('hudLng').innerText = `경도: ${currentLng.toFixed(6)}`;
+
+          if (altitude !== null && !isNaN(altitude)) {
+            document.getElementById('hudAlt').innerText = `고도: ${altitude.toFixed(1)}m`;
+          }
+
+          updateDangerZoneHUD();
+
+          const isMoving = (heading !== null && !isNaN(heading) && currentSpeedKmh > 0.5);
+
+          if (heading !== null && !isNaN(heading)) {
+            document.getElementById('hudHeading').innerText = `방위: ${getDirectionText(heading)}`;
+            if (isHeadingUpMode && isMoving) {
+              const targetBearing = heading;
+              if (Math.abs(targetBearing - lastAppliedBearing) > 3) {
+                map.setBearing(targetBearing);
+                lastAppliedBearing = targetBearing;
+              }
+            }
+          }
+
+          const navIcon = createNavIcon(isMoving);
+
+          if (!userMarker) {
+            userMarker = L.marker(newLatLng, { icon: navIcon }).addTo(map)
+              .bindPopup(`현재 위치<br>${currentLat.toFixed(5)}, ${currentLng.toFixed(5)}`).openPopup();
+          } else {
+            userMarker.setLatLng(newLatLng);
+            userMarker.setIcon(navIcon);
+          }
+
+          if (isFirstPosition) {
+            map.setView(newLatLng, 17);
+            isFirstPosition = false;
+          } else {
+            map.panTo(newLatLng, { animate: true, duration: 0.5 });
+          }
+        },
+        (err) => {
+          document.getElementById('status').innerText = `위치 오류: ${err.message}`;
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    }
+
+    let bleDevice = null;
+    let charGps = null;
+    let charTelemetry = null;
+    let sendTimer = null;
+
+    const SERVICE_UUID        = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHAR_GPS_UUID       = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+    const CHAR_TELEMETRY_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a9";
+
+    document.getElementById('btn-ble').addEventListener('click', async () => {
+      try {
+        if (bleDevice && bleDevice.gatt.connected) {
+          bleDevice.gatt.disconnect();
+          return;
+        }
+
+        document.getElementById('status').innerText = '주변 BLE 기기 검색 중...';
+
+        bleDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [SERVICE_UUID]
+        });
+
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        const server = await bleDevice.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        
+        charGps = await service.getCharacteristic(CHAR_GPS_UUID);
+        charTelemetry = await service.getCharacteristic(CHAR_TELEMETRY_UUID);
+
+        await charTelemetry.startNotifications();
+        charTelemetry.addEventListener('characteristicvaluechanged', onTelemetryReceived);
+
+        document.getElementById('status').innerText = `연결됨: ${bleDevice.name || 'RoadPulse'}`;
+        document.getElementById('btn-ble').style.background = '#dc3545';
+        document.getElementById('btn-ble').innerText = '🔌 BLE 해제';
+        
+        document.getElementById('hudBleDot').innerText = '● LIVE';
+        document.getElementById('hudBleDot').style.color = '#38a169';
+
+        await requestWakeLock();
+
+        if (sendTimer) clearInterval(sendTimer);
+        sendTimer = setInterval(sendLocationToESP32, 1000);
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById('status').innerText = `BLE 오류: ${err.message}`;
+      }
+    });
+
+    // ★ ESP32로 위험구역 유무(isCurrentInsideDanger ? 1 : 0)를 함께 전송
+    async function sendLocationToESP32() {
+      if (!charGps || !bleDevice || !bleDevice.gatt.connected || currentLat === null) return;
+      try {
+        const inDangerFlag = isCurrentInsideDanger ? 1 : 0;
+        const payload = `${currentLat.toFixed(6)},${currentLng.toFixed(6)},${currentSpeedKmh.toFixed(1)},${inDangerFlag}`;
+        const encoder = new TextEncoder();
+        if (charGps.writeValueWithoutResponse) {
+          await charGps.writeValueWithoutResponse(encoder.encode(payload));
+        } else {
+          await charGps.writeValue(encoder.encode(payload));
+        }
+      } catch (e) {}
+    }
+
+    function onTelemetryReceived(event) {
+      const decoder = new TextDecoder('utf-8');
+      const rawText = decoder.decode(event.target.value).trim();
+
+      let isDangerTriggered = false;
+      let isCrashTriggered = false;
+
+      try {
+        const data = JSON.parse(rawText);
+        if (data.tilt !== undefined) {
+          document.getElementById('hudTilt').innerText = `기울기: ${data.tilt.toFixed(1)}°`;
+        }
+        if (data.danger === true) isDangerTriggered = true;
+        if (data.crash === true) isCrashTriggered = true;
+      } catch (err) {
+        if (rawText === "2" || rawText.includes('"danger":true')) isDangerTriggered = true;
+        if (rawText === "1" || rawText.includes('"crash":true')) isCrashTriggered = true;
+      }
+
+      if (isDangerTriggered) {
+        addDangerZoneAtCurrentLocation();
+      }
+
+      const emergencyLayer = document.getElementById('emergencyAlert');
+      if (isCrashTriggered) {
+        emergencyLayer.style.display = 'flex';
+        sendTelegramAlert(currentLat, currentLng, currentSpeedKmh);
+      } else {
+        emergencyLayer.style.display = 'none';
+        telegramSent = false;
+      }
+    }
+
+    async function sendTelegramAlert(lat, lng, spd) {
+      if (telegramSent) return;
+
+      const statusEl = document.getElementById('telegramStatus');
+      if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+        statusEl.innerText = '⚠️ 상단 [⚙️ 설정]에서 봇 토큰과 Chat ID를 등록해 주세요.';
+        return;
+      }
+
+      telegramSent = true;
+      statusEl.innerText = '📡 텔레그램 SOS 발송 중...';
+
+      const mapUrl = `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
+      const message = `🚨 [긴급] RoadPulse 전동 킥보드 전복 사고 발생!\n` +
+                      `기체 전도 상태가 감지되었습니다.\n` +
+                      `📍 사고 위치: ${mapUrl}\n` +
+                      `⚡ 최종 속도: ${spd.toFixed(1)} km/h`;
+
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: TELEGRAM_CHAT_ID,
+            text: message
+          })
+        });
+
+        if (res.ok) statusEl.innerText = '✅ 텔레그램 위치 전송 완료!';
+        else statusEl.innerText = '❌ 전송 실패 (토큰 확인 필요)';
+      } catch (err) {
+        statusEl.innerText = '❌ 네트워크 전송 오류';
+      }
+    }
+
+    function dismissCrashAlert() {
+      document.getElementById('emergencyAlert').style.display = 'none';
+    }
+
+    function onDisconnected() {
+      document.getElementById('status').innerText = 'BLE 연결 해제됨';
+      document.getElementById('btn-ble').style.background = '#28a745';
+      document.getElementById('btn-ble').innerText = '📡 주변 BLE 연결';
+      document.getElementById('hudBleDot').innerText = '● OFF';
+      document.getElementById('hudBleDot').style.color = '#e53e3e';
+
+      if (sendTimer) {
+        clearInterval(sendTimer);
+        sendTimer = null;
+      }
+      releaseWakeLock();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      startAutoGpsTracking();
+      loadSavedDangerZones();
+      if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+        openConfigModal();
+      }
+    });
+  </script>
+</body>
+</html>
